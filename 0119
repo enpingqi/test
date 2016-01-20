@@ -1,0 +1,132 @@
+#include <iostream>
+#include "thread.h"
+#include <cstdlib>
+#include <stdio.h>
+#include <vector>
+#include <utility>
+#include <fstream>
+#include <string>
+#include <time.h>
+#include <unistd.h>
+
+using namespace std;
+
+struct Task{
+	int id;
+	int trackNum;
+};
+
+mutex mutexQueue;
+cv cvQueue;
+vector<cv> cvHandle;
+vector<Task> tQueue;
+
+int maxQueue=0;
+int numFiles=0;
+vector<int> flagFinish;
+
+void child(void *ar)
+{
+    vector<Task> *r = (vector<Task> *) ar;
+
+    //cout << "	start r:" << r->front().id << ": " << r->front().trackNum << '\n';
+    
+    while(r->size()>0){
+    	mutexQueue.lock();
+
+	if(tQueue.size()<maxQueue){
+	}
+	else{
+		cvQueue.wait(mutexQueue);
+	}
+
+	tQueue.push_back(r->front());
+	cout << "requester " << r->front().id << " track " << r->front().trackNum  << "(" << tQueue.size() << "vs" << maxQueue  << '\n';
+        r->erase(r->begin());
+
+	cvHandle[r->front().id].wait(mutexQueue);
+	mutexQueue.unlock();
+    }
+
+    flagFinish.resize(flagFinish.size()-1);
+}
+
+void parent(void *arg)
+{
+    pair<int,char**>* argm = (pair<int,char**>*) arg;
+    maxQueue = *argm->second[1]-'0';
+    numFiles = argm->first-2;
+
+    flagFinish.resize(numFiles);
+    cvHandle.resize(numFiles);
+
+    // read-in
+    vector<Task> Requester; // temp container
+    Task t; // temp container
+    vector<vector<Task> > Requesters;
+    string line;
+    for(int i=0;i<numFiles;i++){
+    	Requester.clear();
+    	t.id=i;
+
+    	ifstream fin(argm->second[i+2]);
+    	if (fin.is_open()){
+    	    while ( getline(fin,line) ){
+    	        t.trackNum=atoi(line.c_str());
+	        Requester.push_back(t);
+    	    }
+    	    fin.close();
+    	}
+    	Requesters.push_back(Requester);
+    }
+
+    // multi-thread
+    for(int i=0;i<numFiles;i++){
+    	thread t((thread_startfunc_t) child, (void *) &Requesters[i]);
+    }
+
+    //usleep(2000);
+
+    //cout << "	ALL THREAD START" << '\n';
+    //cout << "	flagFinish.size(): " << flagFinish.size() << '\n';
+    //cout << "	tQueue.size(): " << tQueue.size() << '\n';
+
+    // scheduler
+    int curTrack=0;
+    int bestPos=0;
+    int bestDis=999;
+    int tempID;
+    while(flagFinish.size()!=0 || tQueue.size()!=0){
+
+    	if(flagFinish.size()!=0){
+    		while(tQueue.size()<maxQueue && flagFinish.size()!=0){}
+    	}
+    	else{}
+
+    	// serve
+	mutexQueue.lock();
+    	for(int i=0;i<tQueue.size();i++){
+    		if( (tQueue[i].trackNum-curTrack)<=bestDis ){
+    			bestPos=i;
+    			bestDis=tQueue[i].trackNum-curTrack;
+    		}
+    	}
+    	cout << "service requester " << tQueue[bestPos].id << " track " << tQueue[bestPos].trackNum << '\n';
+    	curTrack = tQueue[bestPos].trackNum;
+        tempID = tQueue[bestPos].id;
+    	tQueue.erase(tQueue.begin()+bestPos);
+    	bestDis=999;
+	mutexQueue.unlock();
+
+	cvHandle[tempID].signal();
+	cvQueue.signal();
+    }
+}
+
+int main (int argc, char *argv[])
+{
+  pair<int,char**> arg = make_pair(argc,argv);
+  cpu::boot((thread_startfunc_t) parent, (void *) &arg, 0);
+
+  return 0;
+}
